@@ -8,13 +8,11 @@
 #define BAUDRATE 153600
 float max_range = 8.0;
 float min_range = 0.11;
-
-// ros::Publisher g_cloud_pub;
-ros::Publisher g_scan_pub;
-
-// sensor_msgs::PointCloud2 g_init_cloud_msg;
-sensor_msgs::LaserScan g_init_scan_msg;
 double scan_time;
+bool invalid_range_is_inf = true;
+
+ros::Publisher scan_pub;
+sensor_msgs::LaserScan init_scan_msg;
 
 typedef struct __attribute__((packed))
 {
@@ -30,76 +28,17 @@ typedef union
   uint8_t bytes[sizeof(Pointdata)];
 } Point_u;
 
-// sensor_msgs::PointCloud2 createPointcloudMsg(std::string frame_id)
-// {
-//   sensor_msgs::PointCloud2 cloud_msg;
-//   cloud_msg.header.frame_id = frame_id;
-//   cloud_msg.header.stamp = ros::Time::now();
-//   cloud_msg.is_bigendian = false;
-//   cloud_msg.is_dense = false; // there are invalid points (inf or nan)
-//   cloud_msg.height = 1;
-//   // cloud_msg.width = points->size();
-//   cloud_msg.point_step = 13; // Float32 = 4 byte * 3(xyz) + 1 byte intensity = 13 bytes
-
-//   sensor_msgs::PointField field;
-//   field.name = "x";
-//   field.datatype = sensor_msgs::PointField::FLOAT32;
-//   field.count = 1;
-//   field.offset = 0;
-//   cloud_msg.fields.push_back(field);
-//   field.name = "y";
-//   field.datatype = sensor_msgs::PointField::FLOAT32;
-//   field.count = 1;
-//   field.offset = 4;
-//   cloud_msg.fields.push_back(field);
-//   field.name = "z";
-//   field.datatype = sensor_msgs::PointField::FLOAT32;
-//   field.count = 1;
-//   field.offset = 8;
-//   cloud_msg.fields.push_back(field);
-//   field.name = "intensity";
-//   field.datatype = sensor_msgs::PointField::UINT8;
-//   field.count = 1;
-//   field.offset = 12;
-//   cloud_msg.fields.push_back(field);
-//   return cloud_msg;
-// }
-
 sensor_msgs::LaserScan createScanMsg(std::string frame_id)
 {
   sensor_msgs::LaserScan scan;
   scan.header.frame_id = frame_id;
-  scan.angle_max = 2.0 * M_PI;
+  scan.angle_max = 2 * M_PI;
   scan.angle_min = 0;
   scan.range_min = min_range;
   scan.range_max = max_range;
 
   return scan;
 }
-
-// void cloudCallback(std::vector<Point_2d> *points)
-// {
-//   sensor_msgs::PointCloud2 cloud_msg = g_init_cloud_msg;
-//   cloud_msg.header.stamp = ros::Time::now();
-//   cloud_msg.width = points->size();
-
-//   for (int i = 0; i < points->size(); i++)
-//   {
-//     Point_u data;
-//     data.point_data.x = points->at(i).x;
-//     data.point_data.y = points->at(i).y;
-//     data.point_data.z = 0.0;
-//     data.point_data.intensity = points->at(i).intensity;
-
-//     for (size_t i2 = 0; i2 < 13; i2++)
-//     {
-//       cloud_msg.data.push_back(data.bytes[i2]);
-//     }
-//   }
-
-//   // ROS_INFO("##### callback ##### size: %lu",points->size());
-//   g_cloud_pub.publish(cloud_msg);
-// }
 
 void scanCallback(std::vector<Vector_2d> *vectors)
 {
@@ -108,25 +47,36 @@ void scanCallback(std::vector<Vector_2d> *vectors)
     return;
   }
 
-  sensor_msgs::LaserScan scan_msg = g_init_scan_msg;
+  sensor_msgs::LaserScan scan_msg = init_scan_msg;
   scan_msg.header.stamp = ros::Time::now();
-  scan_msg.angle_increment = 2 * M_PI / vectors->size();
+  scan_msg.angle_increment = (scan_msg.angle_max - scan_msg.angle_min) / (vectors->size() - 1);
   scan_msg.time_increment = scan_time / (double)(vectors->size() - 1); // 0.2 / vectors->size(); // TODO: not corectly calculated yet, but better than nothing...
-  scan_msg.scan_time = scan_time;                                      // TODO: not the real value
-  for (int i = 0; i < vectors->size(); i++)
+  scan_msg.scan_time = scan_time;
+
+  int size = (scan_msg.angle_max - scan_msg.angle_min) /
+             scan_msg.angle_increment;
+  scan_msg.ranges.resize(size,
+                         invalid_range_is_inf ? std::numeric_limits<float>::infinity() : 0.0);
+  scan_msg.intensities.resize(size);
+
+  for (size_t i = 0; i < vectors->size(); i++)
   {
     Vector_2d vector = vectors->at((vectors->size() - 1) - i);
-    // filter
-    // if (vector.distance <= max_range &&
-    //     vector.distance >= min_range)
-    // {
-      scan_msg.ranges.push_back(vector.distance);
-      scan_msg.intensities.push_back(vector.intensity);
-    // }
-  }
+    int index = std::ceil((vector.angle - scan_msg.angle_min) /
+                          scan_msg.angle_increment);
+    // printf("index %d!\n", index);
+    if (index >= 0 && index < size)
+    {
+      if (vector.distance >= min_range && vector.distance <= max_range)
+      {
+        scan_msg.ranges[index] = vector.distance;
+        scan_msg.intensities[index] = vector.intensity;
+      }
+    }
 
-  // ROS_INFO("##### callback ##### size: %lu",vectors->size());
-  g_scan_pub.publish(scan_msg);
+    // ROS_INFO("##### callback ##### size: %lu",vectors->size());
+    scan_pub.publish(scan_msg);
+  }
 }
 
 int main(int argc, char **argv)
@@ -141,18 +91,17 @@ int main(int argc, char **argv)
   priv_nh.param("port", port, std::string("/dev/ttyUSB0"));
   priv_nh.param("frame_id", frame_id, std::string("laser"));
 
-  g_scan_pub = n.advertise<sensor_msgs::LaserScan>("scan", 10);
+  scan_pub = n.advertise<sensor_msgs::LaserScan>("scan", 10);
   // g_cloud_pub = n.advertise<sensor_msgs::PointCloud2>("cloud", 10);
 
   ROS_INFO("Starting mb_1r2t_publisher (%s@%i)", port.c_str(), BAUDRATE);
 
   // dont need to redo this every time.
-  // g_init_cloud_msg = createPointcloudMsg(frame_id);
-  g_init_scan_msg = createScanMsg(frame_id);
+
+  init_scan_msg = createScanMsg(frame_id);
 
   Mb_1r2t lidar(port, BAUDRATE);
   lidar.setScanCallback(&scanCallback);
-  // lidar.setCloudCallback(&cloudCallback);
 
   // scan timer
   ros::Time start_scan_time;
@@ -165,7 +114,7 @@ int main(int argc, char **argv)
     // read data from sensor
     lidar.parsePacket();
     end_scan_time = ros::Time::now();
-    
+
     // time between scans
     scan_time = (end_scan_time - start_scan_time).toSec() * 1e-3;
     // reset timer
