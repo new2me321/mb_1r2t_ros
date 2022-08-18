@@ -6,27 +6,14 @@
 #include <vector>
 
 #define BAUDRATE 153600
-float max_range = 8.0;
+
+float max_range = 10.0;
 float min_range = 0.11;
 double scan_time;
-bool invalid_range_is_inf = true;
+bool invalid_range_is_inf = true; // set invalid scan to infinity
 
 ros::Publisher scan_pub;
 sensor_msgs::LaserScan init_scan_msg;
-
-typedef struct __attribute__((packed))
-{
-  float x;
-  float y;
-  float z;
-  uint8_t intensity;
-} Pointdata;
-
-typedef union
-{
-  Pointdata point_data;
-  uint8_t bytes[sizeof(Pointdata)];
-} Point_u;
 
 sensor_msgs::LaserScan createScanMsg(std::string frame_id)
 {
@@ -50,7 +37,7 @@ void scanCallback(std::vector<Vector_2d> *vectors)
   sensor_msgs::LaserScan scan_msg = init_scan_msg;
   scan_msg.header.stamp = ros::Time::now();
   scan_msg.angle_increment = (scan_msg.angle_max - scan_msg.angle_min) / (vectors->size() - 1);
-  scan_msg.time_increment = scan_time / (double)(vectors->size() - 1); // 0.2 / vectors->size(); // TODO: not corectly calculated yet, but better than nothing...
+  scan_msg.time_increment = scan_time / (double)(vectors->size() - 1);
   scan_msg.scan_time = scan_time;
 
   int size = (scan_msg.angle_max - scan_msg.angle_min) /
@@ -73,10 +60,8 @@ void scanCallback(std::vector<Vector_2d> *vectors)
         scan_msg.intensities[index] = vector.intensity;
       }
     }
-
-    // ROS_INFO("##### callback ##### size: %lu",vectors->size());
-    scan_pub.publish(scan_msg);
   }
+  scan_pub.publish(scan_msg);
 }
 
 int main(int argc, char **argv)
@@ -92,7 +77,6 @@ int main(int argc, char **argv)
   priv_nh.param("frame_id", frame_id, std::string("laser"));
 
   scan_pub = n.advertise<sensor_msgs::LaserScan>("scan", 10);
-  // g_cloud_pub = n.advertise<sensor_msgs::PointCloud2>("cloud", 10);
 
   ROS_INFO("Starting mb_1r2t_publisher (%s@%i)", port.c_str(), BAUDRATE);
 
